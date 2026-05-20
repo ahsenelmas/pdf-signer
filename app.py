@@ -3,37 +3,51 @@ from signer.signature_locator import SignatureLocator
 from signer.signature_inserter import SignatureInserter
 from signer.exporter import PDFExporter
 
-# Load PDF
-loader = PDFLoader("assets/sample.pdf")
-document = loader.load_pdf()
 
-# Locate signature field
-locator = SignatureLocator(document)
+def main():
 
-location = locator.find_signature_field("Signature")
+    # Input files
+    pdf_path = "assets/sample.pdf"
+    signature_path = "assets/signature.png"
 
-if location:
+    # Load PDF
+    loader = PDFLoader(pdf_path)
+    document = loader.load_pdf()
 
-    print("Signature field found:", location)
+    # Find signature location
+    locator = SignatureLocator(document)
 
-    # Insert signature
-    signer = SignatureInserter(document)
+    location = locator.find_signature_field("Signature")
 
-    signer.insert_signature(
-        page_number=location["page"],
-        signature_path="assets/signature.png",
-        x=location["x"],
-        y=location["y"],
-        width=150,
-        height=75
-    )
+    if location:
 
-    # Export PDF
-    exporter = PDFExporter(document)
+        print("Signature field found:")
+        print(location)
 
-    saved_path = exporter.save()
+        # Insert signature
+        signer = SignatureInserter(document)
 
-    exporter.close()
+        signer.insert_signature(
+            page_number=location["page"],
+            signature_path=signature_path,
+            x=location["x"],
+            y=location["y"],
+            width=150,
+            height=75
+        )
 
-else:
-    print("Signature field not found.")
+        # Export signed PDF
+        exporter = PDFExporter(document)
+
+        output_path = exporter.save()
+
+        print(f"Signed PDF saved to: {output_path}")
+
+        exporter.close()
+
+    else:
+        print("No signature field found in the PDF.")
+
+
+if __name__ == "__main__":
+    main()
