@@ -1,5 +1,5 @@
-
 import streamlit as st
+from detector import detect_signature_text
 
 st.set_page_config(
     page_title="PDF Signer",
@@ -9,15 +9,30 @@ st.set_page_config(
 
 st.title("PDF Signer")
 
-st.write(
-    "Upload a PDF document and a signature image to sign your file."
-)
+st.write("Upload a PDF document and a signature image to sign your file.")
 
 # Upload PDF
 pdf_file = st.file_uploader(
     "Upload PDF File",
     type=["pdf"]
 )
+
+# Automatic signature coordinate suggestion
+if pdf_file is not None:
+    with open("temp_uploaded.pdf", "wb") as f:
+        f.write(pdf_file.getbuffer())
+
+    detection_result = detect_signature_text("temp_uploaded.pdf")
+
+    if detection_result["found"]:
+        st.success(f"Signature text found on page {detection_result['page']}")
+        st.info(
+            f"Suggested coordinates: "
+            f"X={detection_result['x']:.2f}, "
+            f"Y={detection_result['y']:.2f}"
+        )
+    else:
+        st.warning("Signature text not found. Please enter coordinates manually.")
 
 # Upload signature image
 signature_file = st.file_uploader(
@@ -64,57 +79,3 @@ st.download_button(
     file_name="signed_document.pdf",
     mime="application/pdf"
 )
-=======
-from signer.pdf_loader import PDFLoader
-from signer.signature_locator import SignatureLocator
-from signer.signature_inserter import SignatureInserter
-from signer.exporter import PDFExporter
-
-
-def main():
-
-    # Input files
-    pdf_path = "assets/sample.pdf"
-    signature_path = "assets/signature.png"
-
-    # Load PDF
-    loader = PDFLoader(pdf_path)
-    document = loader.load_pdf()
-
-    # Find signature location
-    locator = SignatureLocator(document)
-
-    location = locator.find_signature_field("Signature")
-
-    if location:
-
-        print("Signature field found:")
-        print(location)
-
-        # Insert signature
-        signer = SignatureInserter(document)
-
-        signer.insert_signature(
-            page_number=location["page"],
-            signature_path=signature_path,
-            x=location["x"],
-            y=location["y"],
-            width=150,
-            height=75
-        )
-
-        # Export signed PDF
-        exporter = PDFExporter(document)
-
-        output_path = exporter.save()
-
-        print(f"Signed PDF saved to: {output_path}")
-
-        exporter.close()
-
-    else:
-        print("No signature field found in the PDF.")
-
-
-if __name__ == "__main__":
-    main()
