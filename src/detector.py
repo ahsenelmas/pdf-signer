@@ -9,6 +9,7 @@ def detect_signature_text(pdf_path):
 
         if text_instances:
             inst = text_instances[0]
+            doc.close()
             return {
                 "found": True,
                 "page": page_number + 1,
@@ -16,14 +17,10 @@ def detect_signature_text(pdf_path):
                 "y": inst.y1 + 10
             }
 
+    doc.close()
     return {
         "found": False,
         "page": None,
         "x": None,
         "y": None
     }
-
-
-if __name__ == "__main__":
-    result = detect_signature_text("sample.pdf")
-    print(result)
