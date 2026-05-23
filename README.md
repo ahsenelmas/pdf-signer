@@ -1,135 +1,68 @@
-# 📄 PDF Signing Tool — Backend
+# PDF Signer
 
+PDF Signer is a small Streamlit app for placing a signature image onto a PDF, previewing the result, and downloading the signed document.
 
-## 🧩 Overview
+## Features
 
-This module handles the core PDF signing functionality of the application. It allows:
+- Upload a PDF and a signature image.
+- Automatically suggest a signature location when the word Signature is found.
+- Manually adjust page, position, and signature size.
+- Preview the signed PDF before downloading it.
+- Generate a demo output from the bundled sample files.
 
-- Loading a PDF document
-- Detecting or specifying where a signature should go
-- Inserting a signature image into the PDF
-- Exporting the signed PDF
+## Project Layout
 
+```
+pdf-signer/
+├── app.py
+├── demo.py
+├── requirements.txt
+├── sample/
+├── src/
+│   ├── detector.py
+│   └── pdf_signer.py
+└── tests/
+    └── test_pdf_signer.py
+```
 
+## Setup
 
-## 🎯 Responsibilities
+1. Create and activate a virtual environment.
+2. Install the dependencies:
 
-- As the Backend / PDF Processing Developer, your job is to:
-- Implement PDF manipulation logic
-- Handle signature placement
-- Ensure correct export of signed documents
-- Provide clean interfaces for integration with the main app (app.py)
+```bash
+pip install -r requirements.txt
+```
 
+## Run The App
 
+```bash
+streamlit run app.py
+```
 
-## 📁 Project Structure
+## Run The Demo
 
-pdf-signing-tool/
+Use the bundled sample files to produce a final signed PDF:
 
-│
+```bash
+python demo.py
+```
 
-├── app.py                     # Main application (integration point)
+The script writes the result to `output/signed_demo.pdf`.
 
-├── requirements.txt           # Python dependencies
+## Run Tests
 
-├── README.md                  # Project documentation
+```bash
+pytest
+```
 
-│
+## Notes
 
-├── signer/                    # Core backend logic
+- JPEG and PNG signature uploads are supported.
+- If the automatic detector cannot find the word Signature, the app falls back to manual coordinates.
+- The signature position is measured using the PDF page coordinate system, so you may still need to fine-tune placement for each document.
 
-│   ├── __init__.py
+## Sample Assets
 
-│   ├── pdf_loader.py          # Load and validate PDF files
-
-│   ├── signature_locator.py   # Detect or define signature position
-
-│   ├── signature_inserter.py  # Insert signature image into PDF
-
-│   ├── exporter.py            # Save/export signed PDF
-
-│
-
-├── utils/                     # Helper utilities
-
-│   ├── __init__.py
-
-│   ├── file_utils.py          # File handling helpers
-
-│   ├── image_utils.py         # Image processing (resize, format)
-
-│
-
-├── assets/                    # Sample/test files
-
-│   ├── sample.pdf
-
-│   ├── signature.png
-
-│
-
-├── output/                    # Generated signed PDFs
-
-│   └── signed.pdf
-
-│
-
-└── tests/                     # (Optional) Unit tests
-
-    ├── test_pdf_loader.py
-    
-    ├── test_signature_inserter.py
-
-
-
-
-## 🔧 Core Modules Breakdown
-1. pdf_loader.py
-   
-   Handles loading and validating PDFs.
-
-   Responsibilities:
-- Open PDF file
-- Check if file is valid
-- Return document object
-
-2. signature_locator.py
-
-   Determines where to place the signature.
-
-   Approaches:
-- Static coordinates (simple version)
-- Keyword-based detection (e.g., find "Signature")
-- Bounding box detection (advanced)
-
-3. signature_inserter.py
-   
-   Places the signature image into the PDF.
-
-   Responsibilities:
-- Load image
-- Resize if needed
-- Insert into PDF page at coordinates
-
-4. exporter.p
-   
-   Handles saving the modified PDF.
-
-   Responsibilities:
-- Save signed file
-- Ensure no overwrite issues
-- Return output path
-
-5. utils/
-   
-   Helper functions:
-- File validation
-- Image resizing
-- Path management
-
-
-Author: Opoti Alvin Waswa
-
-Email: alvinwaswaopoti@gmail.com
-
-Tel No: +48575 380 985
+- `sample/sample.pdf` is the demo document.
+- `sample/download.png` is the bundled signature image used by `demo.py`.
