@@ -9,6 +9,7 @@ from streamlit_drawable_canvas import st_canvas
 
 from src.detector import detect_signature_text
 from src.pdf_signer import sign_pdf
+from db import init_db, create_user, verify_user
 
 
 st.set_page_config(
@@ -17,6 +18,54 @@ st.set_page_config(
     layout="wide"
 )
 
+init_db()
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+
+def auth_page():
+    st.title("PDF Signer Authentication")
+
+    login_tab, register_tab = st.tabs(["Login", "Register"])
+
+    with login_tab:
+        st.subheader("Login")
+
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+
+        if st.button("Login"):
+            user = verify_user(email, password)
+
+            if user:
+                st.session_state.user = user
+                st.success("Login successful.")
+                st.rerun()
+            else:
+                st.error("Invalid email or password.")
+
+    with register_tab:
+        st.subheader("Create Account")
+
+        full_name = st.text_input("Full Name", key="register_full_name")
+        email = st.text_input("Email", key="register_email")
+        password = st.text_input("Password", type="password", key="register_password")
+
+        if st.button("Register"):
+            if not email or not password:
+                st.warning("Please enter email and password.")
+            else:
+                try:
+                    create_user(email, password, full_name)
+                    st.success("Account created. You can login now.")
+                except Exception:
+                    st.error("This email is already registered or database error occurred.")
+
+
+if st.session_state.user is None:
+    auth_page()
+    st.stop()
 
 # ---------- SESSION ----------
 defaults = {
@@ -83,6 +132,12 @@ def create_preview_with_signature(pdf_bytes, signature_bytes, page_number, x, y,
 
 # ---------- SIDEBAR ----------
 st.sidebar.title("PDF Signer")
+
+st.sidebar.write(f"Logged in as: {st.session_state.user['email']}")
+
+if st.sidebar.button("Logout"):
+    st.session_state.user = None
+    st.rerun()
 
 theme = st.sidebar.radio(
     "Theme",
