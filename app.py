@@ -1,5 +1,4 @@
 import io
-import os
 import tempfile
 
 import fitz
@@ -7,37 +6,68 @@ import streamlit as st
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
-from src.detector import detect_signature_text
-from src.pdf_signer import sign_pdf
-from db import init_db, create_user, verify_user
-
-
-st.set_page_config(
-    page_title="PDF Signer",
-    page_icon="📄",
-    layout="wide"
+from db import (
+    init_db,
+    create_user,
+    verify_user,
+    save_signature_template,
+    get_signature_templates,
+    delete_signature_template,
+    save_signed_document,
+    get_signed_documents,
+    delete_signed_document,
 )
 
+from src.detector import detect_signature_text
+from src.pdf_signer import sign_pdf
+
+
+st.set_page_config(page_title="PDF Signer", page_icon="📄", layout="wide")
 init_db()
 
-if "user" not in st.session_state:
-    st.session_state.user = None
+
+defaults = {
+    "user": None,
+    "signed_pdf": None,
+    "current_x": 100,
+    "current_y": 100,
+    "current_page": 1,
+    "signature_width": 150,
+    "signature_height": 75,
+    "detection_done": False,
+}
+
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 def auth_page():
-    st.title("PDF Signer Authentication")
+    st.markdown("""
+    <style>
+    .stApp { background: linear-gradient(135deg, #020617, #111827); color: white; }
+    .main .block-container {
+        max-width: 520px; margin-top: 5rem; background: rgba(15,23,42,0.95);
+        border: 1px solid rgba(148,163,184,0.25); border-radius: 24px;
+        padding: 3rem; box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+    }
+    h1,h2,h3,p,label,span,div { color: white !important; }
+    input { border-radius: 8px !important; }
+    .stButton > button { border-radius: 10px !important; font-weight: 600 !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.title("PDF Signer")
+    st.write("Login or create an account to continue.")
 
     login_tab, register_tab = st.tabs(["Login", "Register"])
 
     with login_tab:
-        st.subheader("Login")
-
         email = st.text_input("Email", key="login_email")
         password = st.text_input("Password", type="password", key="login_password")
 
         if st.button("Login"):
             user = verify_user(email, password)
-
             if user:
                 st.session_state.user = user
                 st.success("Login successful.")
@@ -46,8 +76,6 @@ def auth_page():
                 st.error("Invalid email or password.")
 
     with register_tab:
-        st.subheader("Create Account")
-
         full_name = st.text_input("Full Name", key="register_full_name")
         email = st.text_input("Email", key="register_email")
         password = st.text_input("Password", type="password", key="register_password")
@@ -67,24 +95,7 @@ if st.session_state.user is None:
     auth_page()
     st.stop()
 
-# ---------- SESSION ----------
-defaults = {
-    "signed_pdf": None,
-    "current_x": 100,
-    "current_y": 100,
-    "current_page": 1,
-    "signature_width": 150,
-    "signature_height": 75,
-    "signature_templates": {},
-    "detection_done": False,
-}
 
-for key, value in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
-
-
-# ---------- HELPERS ----------
 def render_pdf_page(pdf_bytes, page_number=1, zoom=1.5):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     page = doc[page_number - 1]
@@ -92,6 +103,11 @@ def render_pdf_page(pdf_bytes, page_number=1, zoom=1.5):
     img_bytes = pix.tobytes("png")
     doc.close()
     return img_bytes
+
+
+def render_pdf_page_pil(pdf_bytes, page_number=1, zoom=1.5):
+    img_bytes = render_pdf_page(pdf_bytes, page_number, zoom)
+    return Image.open(io.BytesIO(img_bytes)).convert("RGBA")
 
 
 def get_pdf_page_count(pdf_bytes):
@@ -130,30 +146,51 @@ def create_preview_with_signature(pdf_bytes, signature_bytes, page_number, x, y,
     )
 
 
-# ---------- SIDEBAR ----------
 st.sidebar.title("PDF Signer")
-
-st.sidebar.write(f"Logged in as: {st.session_state.user['email']}")
+st.sidebar.write("Logged in as:")
+st.sidebar.write(st.session_state.user["email"])
 
 if st.sidebar.button("Logout"):
     st.session_state.user = None
     st.rerun()
 
-theme = st.sidebar.radio(
-    "Theme",
-    ["Dark", "Light"],
-    index=0,
-    key="theme_selector"
-)
+st.sidebar.divider()
+
+st.sidebar.subheader("Saved Documents")
+saved_docs = get_signed_documents(st.session_state.user["id"])
+
+if saved_docs:
+    for doc in saved_docs[:5]:
+        col_download, col_delete = st.sidebar.columns([5, 1])
+
+        with col_download:
+            st.download_button(
+                label=doc["file_name"],
+                data=doc["pdf_bytes"],
+                file_name=doc["file_name"],
+                mime="application/pdf",
+                key=f"download_saved_doc_{doc['id']}"
+            )
+
+        with col_delete:
+            if st.button("🗑️", key=f"delete_saved_doc_{doc['id']}"):
+                delete_signed_document(
+                    document_id=doc["id"],
+                    user_id=st.session_state.user["id"]
+                )
+                st.sidebar.success("Deleted.")
+                st.rerun()
+else:
+    st.sidebar.caption("No saved signed documents yet.")
 
 st.sidebar.divider()
 
 st.sidebar.subheader("How to use")
 st.sidebar.write("""
 1. Upload a PDF
-2. Upload or draw a signature
-3. Signature appears automatically
-4. Move it with direction buttons
+2. Upload, draw, or choose saved signature
+3. Drag the red box on the PDF preview
+4. Click Apply Drag Position
 5. Generate signed PDF
 6. Preview and download
 """)
@@ -161,17 +198,37 @@ st.sidebar.write("""
 st.sidebar.divider()
 
 if st.sidebar.button("Clear / Reset", key="clear_reset_btn"):
+    user = st.session_state.user
     st.session_state.clear()
+    st.session_state.user = user
     st.rerun()
 
 
-# ---------- STYLE ----------
 st.markdown("""
 <style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+
+.stApp {
+    background:
+        linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px),
+        radial-gradient(circle at top left, rgba(59,130,246,0.18), transparent 30%),
+        radial-gradient(circle at bottom right, rgba(168,85,247,0.16), transparent 30%),
+        linear-gradient(to bottom right, #020617, #0f172a);
+    background-size: 40px 40px, 40px 40px, auto, auto, auto;
+    color: #ffffff;
+}
+
 .main .block-container {
     max-width: 1180px;
-    padding-top: 3rem;
-    padding-bottom: 3rem;
+    background: rgba(15, 23, 42, 0.82);
+    border: 1px solid rgba(51,65,85,0.85);
+    border-radius: 24px;
+    padding: 3rem;
+    margin-top: 2rem;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
 }
 
 .hero {
@@ -185,10 +242,12 @@ st.markdown("""
     font-weight: 800;
     letter-spacing: -0.04em;
     margin-bottom: 0.4rem;
+    color: #ffffff !important;
 }
 
 .hero p {
     font-size: 1.05rem;
+    color: #94a3b8 !important;
 }
 
 [data-testid="stSidebar"] {
@@ -202,166 +261,50 @@ st.markdown("""
 .stButton > button,
 .stDownloadButton > button {
     border-radius: 10px !important;
-    padding: 0.6rem 1.1rem !important;
+    padding: 0.65rem 1.15rem !important;
     font-weight: 600 !important;
 }
 
 [data-testid="stFileUploader"] {
+    background-color: rgba(17,24,39,0.85) !important;
+    border: 1px solid #334155 !important;
     border-radius: 14px;
+    padding: 12px;
 }
 
-.stAlert {
+[data-testid="stFileUploader"] section {
+    background-color: #1e293b !important;
+    border: 1px dashed #475569 !important;
     border-radius: 12px;
 }
 
-input {
-    border-radius: 8px !important;
-}
-
-iframe {
-    width: 520px !important;
-    max-width: 520px !important;
-    background-color: white !important;
-    border-radius: 12px !important;
-    overflow: hidden !important;
-}
+.stAlert { border-radius: 12px; }
+input { border-radius: 8px !important; }
+canvas { border-radius: 14px !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-if theme == "Light":
-    st.markdown("""
-    <style>
-    .stApp {
-        background-image:
-            linear-gradient(rgba(15,23,42,0.035) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(15,23,42,0.035) 1px, transparent 1px),
-            radial-gradient(circle at top left, rgba(59,130,246,0.12), transparent 30%),
-            radial-gradient(circle at bottom right, rgba(168,85,247,0.12), transparent 30%),
-            linear-gradient(to bottom right, #f8fafc, #e2e8f0);
-        background-size: 40px 40px, 40px 40px, auto, auto, auto;
-        color: #0f172a;
-    }
-
-    .main .block-container {
-        background: rgba(255,255,255,0.82);
-        backdrop-filter: blur(18px);
-        border: 1px solid rgba(203,213,225,0.75);
-        border-radius: 24px;
-        padding: 3rem;
-        margin-top: 2rem;
-        box-shadow: 0 20px 50px rgba(15, 23, 42, 0.12);
-    }
-
-    h1, h2, h3, h4, p, label, span {
-        color: #0f172a !important;
-    }
-
-    .hero p {
-        color: #64748b !important;
-    }
-
-    [data-testid="stFileUploader"] {
-        background-color: rgba(255,255,255,0.85) !important;
-        border: 1px solid #d1d5db !important;
-        padding: 12px;
-    }
-
-    [data-testid="stFileUploader"] section {
-        background-color: #f8fafc !important;
-        border: 1px dashed #94a3b8 !important;
-        border-radius: 12px;
-    }
-
-    [data-testid="stFileUploader"] button,
-    .stButton > button,
-    .stDownloadButton > button {
-        background-color: #1e40af !important;
-        color: white !important;
-    }
-
-    input {
-        background-color: #ffffff !important;
-        color: #0f172a !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-else:
-    st.markdown("""
-    <style>
-    .stApp {
-        background-image:
-            linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px),
-            radial-gradient(circle at top left, rgba(59,130,246,0.18), transparent 30%),
-            radial-gradient(circle at bottom right, rgba(168,85,247,0.16), transparent 30%),
-            linear-gradient(to bottom right, #020617, #0f172a);
-        background-size: 40px 40px, 40px 40px, auto, auto, auto;
-        color: #ffffff;
-    }
-
-    .main .block-container {
-        background: rgba(15, 23, 42, 0.82);
-        backdrop-filter: blur(18px);
-        border: 1px solid rgba(51,65,85,0.85);
-        border-radius: 24px;
-        padding: 3rem;
-        margin-top: 2rem;
-        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
-    }
-
-    .hero h1 {
-        color: #ffffff !important;
-    }
-
-    .hero p {
-        color: #94a3b8 !important;
-    }
-
-    [data-testid="stFileUploader"] {
-        background-color: rgba(17,24,39,0.85) !important;
-        border: 1px solid #334155 !important;
-        padding: 12px;
-    }
-
-    [data-testid="stFileUploader"] section {
-        background-color: #1e293b !important;
-        border: 1px dashed #475569 !important;
-        border-radius: 12px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-
-# ---------- MAIN ----------
 st.markdown("""
 <div class="hero">
     <h1>PDF Signer</h1>
-    <p>Securely upload, preview, place signatures, and download signed PDF documents.</p>
+    <p>Upload, preview, save signature templates, sign documents, and download signed PDFs.</p>
 </div>
 """, unsafe_allow_html=True)
 
 
-pdf_file = st.file_uploader(
-    "Upload PDF File",
-    type=["pdf"],
-    key="pdf_uploader"
-)
+pdf_file = st.file_uploader("Upload PDF File", type=["pdf"], key="pdf_uploader")
 
 signature_source = st.radio(
     "Signature Method",
-    ["Upload Signature Image", "Draw Signature"],
+    ["Upload Signature Image", "Draw Signature", "Use Saved Signature"],
     horizontal=True,
     key="signature_method"
 )
 
-signature_file = None
-drawn_signature = None
 active_signature_bytes = None
 
 
-# ---------- SIGNATURE INPUT ----------
 if signature_source == "Upload Signature Image":
     signature_file = st.file_uploader(
         "Upload Signature Image",
@@ -381,29 +324,31 @@ if signature_source == "Upload Signature Image":
 
         if st.button("Save Signature Template", key="save_uploaded_signature_template_btn"):
             if template_name:
-                st.session_state.signature_templates[template_name] = active_signature_bytes
-                st.success("Signature template saved.")
+                save_signature_template(
+                    user_id=st.session_state.user["id"],
+                    template_name=template_name,
+                    signature_bytes=active_signature_bytes
+                )
+                st.success("Signature template saved to database.")
+                st.rerun()
             else:
                 st.warning("Please enter a template name.")
 
-else:
+elif signature_source == "Draw Signature":
     st.subheader("Draw Your Signature")
     st.write("Draw inside the white box below:")
 
-    canvas_col, empty_col = st.columns([1, 2])
-
-    with canvas_col:
-        canvas_result = st_canvas(
-            fill_color="rgba(255, 255, 255, 0)",
-            stroke_width=3,
-            stroke_color="#000000",
-            background_color="#ffffff",
-            height=180,
-            width=500,
-            drawing_mode="freedraw",
-            update_streamlit=True,
-            key="signature_canvas"
-        )
+    canvas_result = st_canvas(
+        fill_color="rgba(255, 255, 255, 0)",
+        stroke_width=3,
+        stroke_color="#000000",
+        background_color="#ffffff",
+        height=180,
+        width=500,
+        drawing_mode="freedraw",
+        update_streamlit=True,
+        key="signature_canvas"
+    )
 
     drawn_signature = draw_signature_to_png(canvas_result)
 
@@ -426,53 +371,80 @@ else:
 
         if st.button("Save Drawn Signature Template", key="save_drawn_signature_template_btn"):
             if template_name and active_signature_bytes:
-                st.session_state.signature_templates[template_name] = active_signature_bytes
-                st.success("Drawn signature template saved.")
+                save_signature_template(
+                    user_id=st.session_state.user["id"],
+                    template_name=template_name,
+                    signature_bytes=active_signature_bytes
+                )
+                st.success("Drawn signature saved to database.")
+                st.rerun()
             else:
                 st.warning("Please draw a signature and enter a template name.")
 
+else:
+    st.subheader("Saved Signature Templates")
+    saved_templates = get_signature_templates(st.session_state.user["id"])
 
-# ---------- TEMPLATE ----------
-selected_template = "None"
+    if saved_templates:
+        template_options = {
+            f"{template['template_name']}": template
+            for template in saved_templates
+        }
 
-if st.session_state.signature_templates:
-    selected_template = st.selectbox(
-        "Use saved signature template",
-        ["None"] + list(st.session_state.signature_templates.keys()),
-        key="template_selector"
-    )
-
-    if selected_template != "None":
-        active_signature_bytes = st.session_state.signature_templates[selected_template]
-
-        st.image(
-            active_signature_bytes,
-            caption=f"Template: {selected_template}",
-            width=250
+        selected_template_name = st.selectbox(
+            "Choose saved signature",
+            list(template_options.keys()),
+            key="saved_template_selector"
         )
 
+        selected_template = template_options[selected_template_name]
+        active_signature_bytes = selected_template["signature_bytes"]
 
-# ---------- PDF AREA ----------
+        col_sig_preview, col_sig_delete = st.columns([5, 1])
+
+        with col_sig_preview:
+            st.image(
+                active_signature_bytes,
+                caption=f"Selected: {selected_template_name}",
+                width=250
+            )
+
+        with col_sig_delete:
+            st.write("")
+            st.write("")
+            if st.button("🗑️", key="delete_selected_signature_template"):
+                delete_signature_template(
+                    template_id=selected_template["id"],
+                    user_id=st.session_state.user["id"]
+                )
+                st.success("Signature template deleted.")
+                st.rerun()
+    else:
+        st.info("No saved signatures yet. Upload or draw one first.")
+
+
 if pdf_file:
     pdf_bytes = pdf_file.getvalue()
     page_count = get_pdf_page_count(pdf_bytes)
 
     st.subheader("PDF Information")
-
     col_info1, col_info2, col_info3 = st.columns(3)
 
     with col_info1:
         st.write(f"**File name:** {pdf_file.name}")
-
     with col_info2:
         st.write(f"**File size:** {len(pdf_bytes) / 1024:.2f} KB")
-
     with col_info3:
         st.write(f"**Pages:** {page_count}")
 
     temp_pdf_path = save_uploaded_file(pdf_file, ".pdf")
     detection_result = detect_signature_text(temp_pdf_path)
-    os.remove(temp_pdf_path)
+
+    try:
+        import os
+        os.remove(temp_pdf_path)
+    except Exception:
+        pass
 
     if detection_result["found"] and not st.session_state.detection_done:
         st.session_state.current_page = detection_result["page"]
@@ -483,8 +455,7 @@ if pdf_file:
     if detection_result["found"]:
         st.success(f"Signature text found on page {detection_result['page']}")
         st.info(
-            f"Suggested coordinates: "
-            f"X={int(detection_result['x'])}, "
+            f"Suggested coordinates: X={int(detection_result['x'])}, "
             f"Y={int(detection_result['y'])}"
         )
     else:
@@ -498,9 +469,73 @@ if pdf_file:
         key="preview_page_input"
     )
 
-    st.subheader("PDF Page Preview")
+    st.subheader("Drag Signature Position")
 
     if active_signature_bytes:
+        st.write("Drag the red box on the PDF preview, then click **Apply Drag Position**.")
+
+        canvas_zoom = 1.5
+        bg_img = render_pdf_page_pil(pdf_bytes, st.session_state.current_page, zoom=canvas_zoom)
+        canvas_width, canvas_height = bg_img.size
+
+        initial_drawing = {
+            "version": "4.4.0",
+            "objects": [
+                {
+                    "type": "rect",
+                    "left": st.session_state.current_x * canvas_zoom,
+                    "top": st.session_state.current_y * canvas_zoom,
+                    "width": st.session_state.signature_width * canvas_zoom,
+                    "height": st.session_state.signature_height * canvas_zoom,
+                    "fill": "rgba(239, 68, 68, 0.18)",
+                    "stroke": "#ef4444",
+                    "strokeWidth": 2,
+                    "rx": 6,
+                    "ry": 6,
+                }
+            ],
+        }
+
+        drag_canvas = st_canvas(
+            fill_color="rgba(239, 68, 68, 0.18)",
+            stroke_width=2,
+            stroke_color="#ef4444",
+            background_image=bg_img,
+            height=canvas_height,
+            width=canvas_width,
+            drawing_mode="transform",
+            initial_drawing=initial_drawing,
+            update_streamlit=True,
+            key=f"drag_canvas_page_{st.session_state.current_page}"
+        )
+
+        if st.button("Apply Drag Position", key="apply_drag_position_btn"):
+            try:
+                objects = drag_canvas.json_data["objects"]
+
+                if objects:
+                    obj = objects[0]
+                    left = obj.get("left", 0)
+                    top = obj.get("top", 0)
+                    width = obj.get("width", st.session_state.signature_width * canvas_zoom)
+                    height = obj.get("height", st.session_state.signature_height * canvas_zoom)
+                    scale_x = obj.get("scaleX", 1)
+                    scale_y = obj.get("scaleY", 1)
+
+                    st.session_state.current_x = int(left / canvas_zoom)
+                    st.session_state.current_y = int(top / canvas_zoom)
+                    st.session_state.signature_width = int((width * scale_x) / canvas_zoom)
+                    st.session_state.signature_height = int((height * scale_y) / canvas_zoom)
+
+                    st.success("Signature position updated.")
+                    st.rerun()
+                else:
+                    st.warning("Please move the red signature box first.")
+            except Exception as e:
+                st.error(f"Could not read drag position: {e}")
+
+        st.subheader("Live Preview with Signature")
+
         try:
             preview_pdf = create_preview_with_signature(
                 pdf_bytes=pdf_bytes,
@@ -512,44 +547,31 @@ if pdf_file:
                 height=st.session_state.signature_height
             )
 
-            preview_img = render_pdf_page(
-                preview_pdf,
-                st.session_state.current_page
-            )
+            preview_img = render_pdf_page(preview_pdf, st.session_state.current_page)
 
             st.image(
                 preview_img,
                 caption="Live Preview with Signature",
-                width="stretch"
+                use_column_width=True
             )
-
         except Exception as e:
             st.warning(f"Live preview could not be generated: {e}")
 
-            preview_img = render_pdf_page(
-                pdf_bytes,
-                st.session_state.current_page
-            )
-
-            st.image(
-                preview_img,
-                caption=f"Page {st.session_state.current_page}",
-                width="stretch"
-            )
-
     else:
-        preview_img = render_pdf_page(
-            pdf_bytes,
-            st.session_state.current_page
-        )
+        st.subheader("PDF Page Preview")
+        preview_img = render_pdf_page(pdf_bytes, st.session_state.current_page)
 
         st.image(
             preview_img,
             caption=f"Page {st.session_state.current_page}",
-            width="stretch"
+            use_column_width=True
         )
 
     st.subheader("Adjust Signature Position")
+    st.info(
+        "Recommended: first drag the red box and click Apply Drag Position. "
+        "Use the arrows only for small final adjustments."
+    )
 
     move_step = st.slider(
         "Move step",
@@ -559,29 +581,29 @@ if pdf_file:
         key="move_step_slider"
     )
 
-    col_a, col_b, col_c, col_d, col_e = st.columns([1, 1, 1, 1, 1])
+    col_left, col_up, col_down, col_right, col_reset = st.columns(5)
 
-    with col_b:
-        if st.button("Up", key="move_up_btn"):
-            st.session_state.current_y -= move_step
-            st.rerun()
-
-    with col_a:
-        if st.button("Left", key="move_left_btn"):
+    with col_left:
+        if st.button("← Left", key="move_left_btn"):
             st.session_state.current_x -= move_step
             st.rerun()
 
-    with col_c:
-        if st.button("Down", key="move_down_btn"):
+    with col_up:
+        if st.button("↑ Up", key="move_up_btn"):
+            st.session_state.current_y -= move_step
+            st.rerun()
+
+    with col_down:
+        if st.button("↓ Down", key="move_down_btn"):
             st.session_state.current_y += move_step
             st.rerun()
 
-    with col_d:
-        if st.button("Right", key="move_right_btn"):
+    with col_right:
+        if st.button("→ Right", key="move_right_btn"):
             st.session_state.current_x += move_step
             st.rerun()
 
-    with col_e:
+    with col_reset:
         if st.button("Reset Position", key="reset_position_btn"):
             if detection_result["found"]:
                 st.session_state.current_x = int(detection_result["x"])
@@ -592,41 +614,47 @@ if pdf_file:
                 st.session_state.current_y = 100
             st.rerun()
 
-    st.subheader("Signature Settings")
+    st.write(
+        f"Current position: X={st.session_state.current_x}, "
+        f"Y={st.session_state.current_y}, "
+        f"Width={st.session_state.signature_width}, "
+        f"Height={st.session_state.signature_height}"
+    )
 
-    col1, col2 = st.columns(2)
+    with st.expander("Advanced Signature Settings"):
+        col1, col2 = st.columns(2)
 
-    with col1:
-        st.session_state.current_x = st.number_input(
-            "X Position",
-            min_value=0,
-            value=st.session_state.current_x,
-            key="x_position_input"
-        )
+        with col1:
+            st.session_state.current_x = st.number_input(
+                "X Position",
+                min_value=0,
+                value=st.session_state.current_x,
+                key="x_position_input"
+            )
 
-        st.session_state.signature_width = st.slider(
-            "Signature Width",
-            min_value=50,
-            max_value=400,
-            value=st.session_state.signature_width,
-            key="signature_width_slider"
-        )
+            st.session_state.signature_width = st.slider(
+                "Signature Width",
+                min_value=50,
+                max_value=400,
+                value=st.session_state.signature_width,
+                key="signature_width_slider"
+            )
 
-    with col2:
-        st.session_state.current_y = st.number_input(
-            "Y Position",
-            min_value=0,
-            value=st.session_state.current_y,
-            key="y_position_input"
-        )
+        with col2:
+            st.session_state.current_y = st.number_input(
+                "Y Position",
+                min_value=0,
+                value=st.session_state.current_y,
+                key="y_position_input"
+            )
 
-        st.session_state.signature_height = st.slider(
-            "Signature Height",
-            min_value=25,
-            max_value=200,
-            value=st.session_state.signature_height,
-            key="signature_height_slider"
-        )
+            st.session_state.signature_height = st.slider(
+                "Signature Height",
+                min_value=25,
+                max_value=200,
+                value=st.session_state.signature_height,
+                key="signature_height_slider"
+            )
 
     st.divider()
 
@@ -646,14 +674,19 @@ if pdf_file:
                 )
 
                 st.session_state.signed_pdf = signed_pdf
-                st.success("PDF signed successfully.")
 
+                save_signed_document(
+                    user_id=st.session_state.user["id"],
+                    file_name=f"signed_{pdf_file.name}",
+                    pdf_bytes=signed_pdf
+                )
+
+                st.success("PDF signed and saved successfully.")
             except Exception as e:
                 st.error(f"Error while signing PDF: {e}")
 
     if st.session_state.signed_pdf:
         st.subheader("Signed PDF Preview")
-
         signed_preview = render_pdf_page(
             st.session_state.signed_pdf,
             st.session_state.current_page
@@ -662,7 +695,7 @@ if pdf_file:
         st.image(
             signed_preview,
             caption="Signed PDF Preview",
-            width="stretch"
+            use_column_width=True
         )
 
         st.download_button(
@@ -675,4 +708,4 @@ if pdf_file:
 
 
 st.divider()
-st.caption("PDF Signer | Internship Project | Python · Streamlit · PyMuPDF")
+st.caption("PDF Signer | Internship Project | Python · Streamlit · PyMuPDF · Neon PostgreSQL")
