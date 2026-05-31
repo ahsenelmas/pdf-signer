@@ -1,4 +1,5 @@
 import io
+import os
 import tempfile
 
 import fitz
@@ -10,9 +11,6 @@ from db import (
     init_db,
     create_user,
     verify_user,
-    save_signature_template,
-    get_signature_templates,
-    delete_signature_template,
     save_signed_document,
     get_signed_documents,
     delete_signed_document,
@@ -156,7 +154,7 @@ if st.sidebar.button("Logout"):
 
 st.sidebar.divider()
 
-st.sidebar.subheader("Saved Documents")
+st.sidebar.subheader("Saved Signed PDFs")
 saved_docs = get_signed_documents(st.session_state.user["id"])
 
 if saved_docs:
@@ -181,18 +179,26 @@ if saved_docs:
                 st.sidebar.success("Deleted.")
                 st.rerun()
 else:
-    st.sidebar.caption("No saved signed documents yet.")
+    st.sidebar.caption("No saved signed PDFs yet.")
+
+st.sidebar.divider()
+
+st.sidebar.subheader("Security Note")
+st.sidebar.write("""
+Signature images are not stored permanently.
+They are used only during the signing process.
+""")
 
 st.sidebar.divider()
 
 st.sidebar.subheader("How to use")
 st.sidebar.write("""
 1. Upload a PDF
-2. Upload, draw, or choose saved signature
+2. Upload or draw a signature
 3. Drag the red box on the PDF preview
 4. Click Apply Drag Position
 5. Generate signed PDF
-6. Preview and download
+6. Download or delete signed PDF
 """)
 
 st.sidebar.divider()
@@ -288,16 +294,21 @@ canvas { border-radius: 14px !important; }
 st.markdown("""
 <div class="hero">
     <h1>PDF Signer</h1>
-    <p>Upload, preview, save signature templates, sign documents, and download signed PDFs.</p>
+    <p>Upload, preview, sign, and download PDFs without permanently storing signature images.</p>
 </div>
 """, unsafe_allow_html=True)
 
+
+st.info(
+    "For security reasons, signature images are not stored permanently. "
+    "They are only used temporarily during the signing process."
+)
 
 pdf_file = st.file_uploader("Upload PDF File", type=["pdf"], key="pdf_uploader")
 
 signature_source = st.radio(
     "Signature Method",
-    ["Upload Signature Image", "Draw Signature", "Use Saved Signature"],
+    ["Upload Signature Image", "Draw Signature"],
     horizontal=True,
     key="signature_method"
 )
@@ -314,25 +325,7 @@ if signature_source == "Upload Signature Image":
 
     if signature_file:
         active_signature_bytes = signature_file.getvalue()
-        st.image(signature_file, caption="Uploaded Signature", width=250)
-
-        template_name = st.text_input(
-            "Save this signature as template",
-            placeholder="Example: My Signature",
-            key="uploaded_signature_template_name"
-        )
-
-        if st.button("Save Signature Template", key="save_uploaded_signature_template_btn"):
-            if template_name:
-                save_signature_template(
-                    user_id=st.session_state.user["id"],
-                    template_name=template_name,
-                    signature_bytes=active_signature_bytes
-                )
-                st.success("Signature template saved to database.")
-                st.rerun()
-            else:
-                st.warning("Please enter a template name.")
+        st.image(signature_file, caption="Uploaded Signature - temporary only", width=250)
 
 elif signature_source == "Draw Signature":
     st.subheader("Draw Your Signature")
@@ -355,72 +348,9 @@ elif signature_source == "Draw Signature":
     if drawn_signature:
         active_signature_bytes = drawn_signature.getvalue()
 
-    col_clear, col_save = st.columns([1, 3])
-
-    with col_clear:
-        if st.button("Clear Drawing", key="clear_drawing_btn"):
-            st.session_state.pop("signature_canvas", None)
-            st.rerun()
-
-    with col_save:
-        template_name = st.text_input(
-            "Save drawn signature as template",
-            placeholder="Example: My Signature",
-            key="drawn_signature_template_name"
-        )
-
-        if st.button("Save Drawn Signature Template", key="save_drawn_signature_template_btn"):
-            if template_name and active_signature_bytes:
-                save_signature_template(
-                    user_id=st.session_state.user["id"],
-                    template_name=template_name,
-                    signature_bytes=active_signature_bytes
-                )
-                st.success("Drawn signature saved to database.")
-                st.rerun()
-            else:
-                st.warning("Please draw a signature and enter a template name.")
-
-else:
-    st.subheader("Saved Signature Templates")
-    saved_templates = get_signature_templates(st.session_state.user["id"])
-
-    if saved_templates:
-        template_options = {
-            f"{template['template_name']}": template
-            for template in saved_templates
-        }
-
-        selected_template_name = st.selectbox(
-            "Choose saved signature",
-            list(template_options.keys()),
-            key="saved_template_selector"
-        )
-
-        selected_template = template_options[selected_template_name]
-        active_signature_bytes = selected_template["signature_bytes"]
-
-        col_sig_preview, col_sig_delete = st.columns([5, 1])
-
-        with col_sig_preview:
-            st.image(
-                active_signature_bytes,
-                caption=f"Selected: {selected_template_name}",
-                width=250
-            )
-
-        with col_sig_delete:
-            st.write("")
-            st.write("")
-            if st.button("🗑️", key="delete_selected_signature_template"):
-                delete_signature_template(
-                    template_id=selected_template["id"],
-                    user_id=st.session_state.user["id"]
-                )
-                st.success("Signature template deleted.")
-                st.rerun()
-    else:
-        st.info("No saved signatures yet. Upload or draw one first.")
+    if st.button("Clear Drawing", key="clear_drawing_btn"):
+        st.session_state.pop("signature_canvas", None)
+        st.rerun()
 
 
 if pdf_file:
@@ -441,7 +371,6 @@ if pdf_file:
     detection_result = detect_signature_text(temp_pdf_path)
 
     try:
-        import os
         os.remove(temp_pdf_path)
     except Exception:
         pass
@@ -660,7 +589,7 @@ if pdf_file:
 
     if st.button("Generate Signed PDF", key="generate_signed_pdf_btn"):
         if not active_signature_bytes:
-            st.error("Please upload, draw, or select a signature.")
+            st.error("Please upload or draw a signature.")
         else:
             try:
                 signed_pdf = sign_pdf(
@@ -681,7 +610,9 @@ if pdf_file:
                     pdf_bytes=signed_pdf
                 )
 
-                st.success("PDF signed and saved successfully.")
+                active_signature_bytes = None
+
+                st.success("PDF signed successfully. The signature image was not stored permanently.")
             except Exception as e:
                 st.error(f"Error while signing PDF: {e}")
 
